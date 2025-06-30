@@ -7,15 +7,18 @@ class MendeleyHooks {
 	 *
 	 * @param Parser $parser
 	 */
-	public static function onParserFirstCallInit( Parser &$parser ) {
+	public static function onParserFirstCallInit( Parser $parser ) {
 		$parser->setFunctionHook(
 			'mendeley',
 			'MendeleyHooks::mendeley'
 		);
-
 	}
 
-	public static function onFormPrinterSetup( &$pfFormPrinter ) {
+	/**
+	 * @param PFFormPrinter $pfFormPrinter
+	 * @return void
+	 */
+	public static function onFormPrinterSetup( PFFormPrinter $pfFormPrinter ) {
 		$pfFormPrinter->registerInputType( 'PFMendeleyInput' );
 		$pfFormPrinter->registerInputType( 'PFMendeleyInputDOI' );
 	}
@@ -26,19 +29,14 @@ class MendeleyHooks {
 	 * @param Parser $parser Unused
 	 * @return string
 	 */
-	public static function mendeley( Parser &$parser ) {
+	public static function mendeley( Parser $parser ) {
 		$options = self::extractOptions( array_slice( func_get_args(), 1 ) );
 
 		$parameter = $options['parameter'];
 
 		$mendeley = Mendeley::getInstance();
 
-		$document_key = '';
-		if ( isset( $options['doi'] ) ) {
-			$document_key = $options['doi'];
-		} else {
-			$document_key = $options['id'];
-		}
+		$document_key = $options['doi'] ?? $options['id'];
 
 		// CACHE_DB is slow but we can cache more items - which is likely what we want
 		$cache_object = ObjectCache::getInstance( CACHE_DB );
@@ -51,21 +49,36 @@ class MendeleyHooks {
 		}
 		$access_token = $mendeley->getAccessToken();
 
-		$result = array();
 		if ( isset( $options['doi'] ) ) {
-			$result = $mendeley->httpRequest( "https://api.mendeley.com/catalog?doi=". $options['doi'] ."&access_token=$access_token&view=all" );
-			$result = json_decode( $result, true )[0];
+			$result = $mendeley->httpRequest(
+				"https://api.mendeley.com/catalog?doi={$options['doi']}&access_token=$access_token&view=all"
+			);
+			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			if ( !$status->isGood() ) {
+				wfDebugLog( 'Mendeley', $status->getHTML() );
+			}
+			$result = $status->getValue()[0] ?? $status->getValue();
 		} else {
-			$result = $mendeley->httpRequest( "https://api.mendeley.com/catalog/". $options['id'] ."?access_token=$access_token&view=all" );
-			$result = json_decode( $result, true );
+			$result = $mendeley->httpRequest(
+				"https://api.mendeley.com/catalog/{$options['id']}?access_token=$access_token&view=all"
+			);
+			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			if ( !$status->isGood() ) {
+				wfDebugLog( 'Mendeley', $status->getHTML() );
+			}
+			$result = $status->getValue();
 		}
 
-		if ( empty( $result ) || isset( $result['errorId'] ) ) {
+		if ( empty( $result ) || isset( $result['errorId'] ) || isset( $result['message'] ) ) {
+			wfDebugLog(
+				'Mendeley',
+				'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) . ', message: ' . ( $result['message'] ?? 'empty' )
+			);
 			return '';
 		}
 
 		// Store in Cache
-        $serialized = serialize( $result );
+		$serialized = serialize( $result );
 		$cache_object->set( $document_key, $serialized, 5 * 24 * 60 * 60 );
 
 		return self::getArrayElementFromPath( $result, $parameter );
@@ -87,10 +100,11 @@ class MendeleyHooks {
 		# http://stackoverflow.com/a/2951721
 		$paths = explode( $delimiter, $path );
 		foreach ( $paths as $index ) {
-			if ( array_keys($array) === range(0, count($array) - 1) ) {
-				// if we have reached a numeric key just take the values from each array item, concatenate and return it.
-				$output = array();
-				foreach( $array as $array_item ) {
+			if ( array_keys( $array ) === range( 0, count( $array ) - 1 ) ) {
+				// if we have reached a numeric key just take the values from each array item,
+				// concatenate and return it.
+				$output = [];
+				foreach ( $array as $array_item ) {
 					if ( isset( $array_item[$index] ) ) {
 						$output[] = $array_item[$index];
 					}
@@ -107,8 +121,12 @@ class MendeleyHooks {
 		return strip_tags( implode( ',', (array)$array ) );
 	}
 
+	/**
+	 * @param array $options
+	 * @return array
+	 */
 	public static function extractOptions( array $options ) {
-		$results = array();
+		$results = [];
 
 		foreach ( $options as $option ) {
 			$pair = explode( '=', $option, 2 );

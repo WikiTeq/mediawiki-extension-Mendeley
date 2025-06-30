@@ -17,10 +17,10 @@ class MendeleyRefreshTokenMaintenance extends Maintenance {
 	}
 
 	public function execute() {
-		$this->output('Starting..');
+		$this->output( 'Starting..' );
 		$mendeley = Mendeley::getInstance();
 		$mendeley->refreshAccessToken();
-		$this->output('Done!');
+		$this->output( 'Done!' );
 	}
 }
 

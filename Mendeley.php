@@ -2,10 +2,15 @@
 
 class Mendeley {
 
+	/**
+	 * @var self
+	 */
 	private static $instance;
-	private $tokenFails = 0;
 
-	public static function getInstance() {
+	/**
+	 * @return self
+	 */
+	public static function getInstance(): self {
 		if ( self::$instance === null ) {
 			self::$instance = new self();
 		}
@@ -30,11 +35,9 @@ class Mendeley {
 			   $wgMendeleyPageFormula,
 			   $wgMendeleyFieldValuesDelimiter,
 			   $wgMendeleyOverwriteTemplateOnly,
-			   $wgMendeleyAppendFieldValuesDelimiter,
 			   $wgMendeleyImportPageLimit,
 			   $wgMendeleyUseJobs;
 
-		$pages = 0;
 		$pagesLinks = [];
 		$access_token = $this->getAccessToken();
 		$responseHeaders = [];
@@ -45,10 +48,18 @@ class Mendeley {
 			"&view=all" .
 			"&limit=$wgMendeleyImportPageLimit",
 			'',
-			array(),
+			[],
 			$responseHeaders
 		);
-		$result = json_decode( $result, true );
+
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		if ( !$status->isOK() ) {
+			throw new Exception( $status->getHTML() );
+		}
+		if ( !$status->isGood() ) {
+			wfDebugLog( 'Mendeley', $status->getHTML() );
+		}
+		$result = $status->getValue();
 
 		// Token has expired: oauth/TOKEN_EXPIRED
 		// This is necessary because we don't know initial token issue timestamp
@@ -65,18 +76,28 @@ class Mendeley {
 				"&view=all" .
 				"&limit=$wgMendeleyImportPageLimit",
 				'',
-				array(),
+				[],
 				$responseHeaders
 			);
-			$result = json_decode( $result, true );
+
+			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			if ( !$status->isOK() ) {
+				throw new Exception( $status->getHTML() );
+			}
+			if ( !$status->isGood() ) {
+				wfDebugLog( 'Mendeley', $status->getHTML() );
+			}
+			$result = $status->getValue();
 		}
 
 		// Fail after first refresh try or if token is not refreshable
-		if ( isset( $result['errorId'] ) ) {
-			throw new Exception($result['message']);
+		if ( !empty( $result['errorId'] ) || !empty( $result['message'] ) ) {
+			throw new Exception(
+				'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) . ', message: ' . ( $result['message'] ?? 'empty' )
+			);
 		}
 
-		if( count( $result ) ) {
+		if ( count( $result ) ) {
 			while ( true ) {
 				foreach ( $result as $result_row ) {
 
@@ -94,16 +115,22 @@ class Mendeley {
 							// special case for deep arrays
 							if ( is_array( $row[$property] ) ) {
 								if ( count( $row[$property] ) && is_array( $row[$property][0] ) ) {
-									$text .= '|' . $field . '=' .
-											 $this->processValue(
-												 $property,
-											 implode( $wgMendeleyTemplateFieldsMapDelimiter, array_map( function ( $item ) use ( $wgMendeleyFieldValuesDelimiter ) {
-												 return implode( $wgMendeleyFieldValuesDelimiter, $item );
-											 }, $row[$property] ) ) ) . "\n";
+									$text .= '|' . $field . '=' . $this->processValue(
+										$property,
+										implode(
+											$wgMendeleyTemplateFieldsMapDelimiter,
+											array_map( static function ( $item ) use (
+												$wgMendeleyFieldValuesDelimiter
+											) {
+													return implode( $wgMendeleyFieldValuesDelimiter, $item );
+											},
+											$row[$property] ) )
+									) . "\n";
 								} else {
-									$text .= '|' . $field . '=' .
-											 $this->processValue( $property, implode( $wgMendeleyTemplateFieldsMapDelimiter, $row[$property] ) ) .
-											 "\n";
+									$text .= '|' . $field . '=' . $this->processValue(
+										$property,
+										implode( $wgMendeleyTemplateFieldsMapDelimiter, $row[$property] )
+									) . "\n";
 								}
 							} else {
 								// fallback to normal processing
@@ -122,9 +149,9 @@ class Mendeley {
 					if ( count( $appendProps ) ) {
 						foreach ( $appendProps as $k => $v ) {
 							$pattern = substr( $v, strpos( $v, '[' ) + 1 );
-							$pattern = substr( $pattern, 0,strpos( $pattern, ']' ) );
-							$value = preg_replace_callback( '/\<([a-z]+)\>/', function( $m ) use ( $row ) {
-								if ( isset($row[$m[1]]) ) {
+							$pattern = substr( $pattern, 0, strpos( $pattern, ']' ) );
+							$value = preg_replace_callback( '/\<([a-z]+)\>/', static function ( $m ) use ( $row ) {
+								if ( isset( $row[$m[1]] ) ) {
 									return $row[$m[1]];
 								}
 								return '';
@@ -135,11 +162,11 @@ class Mendeley {
 
 					// TODO: fixme
 					$dateprop = '';
-					if( isset( $row['year'] ) && !empty( $row['year'] ) ) {
+					if ( !empty( $row['year'] ) ) {
 						$dateprop .= $row['year'];
-						if( isset( $row['month']) && !empty( $row['month'] ) ) {
+						if ( !empty( $row['month'] ) ) {
 							$dateprop .= '-' . $row['month'];
-							if( isset( $row['day']) && !empty( $row['day'] ) ) {
+							if ( !empty( $row['day'] ) ) {
 								$dateprop .= '-' . $row['day'];
 							}
 						}
@@ -153,31 +180,36 @@ class Mendeley {
 
 					// Replace tokens in page formula
 					if ( $wgMendeleyPageFormula ) {
-						$keys = array_map( function ( $key ) {
+						$keys = array_map( static function ( $key ) {
 							return '<' . $key . '>';
 						}, array_keys( $row ) );
-						$replacements = array_map( function ( $r ) use ( $wgMendeleyTemplateFieldsMapDelimiter ) {
-							if ( is_array( $r ) ) {
-								if ( !count( $r ) ) {
-									return '';
-								}
-								if ( is_array( $r[0] ) ) {
-									if ( !count( $r[0] ) ) {
+						$replacements = array_map(
+							static function ( $r ) use ( $wgMendeleyTemplateFieldsMapDelimiter ) {
+								if ( is_array( $r ) ) {
+									if ( !count( $r ) ) {
 										return '';
 									}
-									return implode( ' ', $r[0] );
+									if ( is_array( $r[0] ) ) {
+										if ( !count( $r[0] ) ) {
+											return '';
+										}
+										return implode( ' ', $r[0] );
+									}
+									return $r[0];
 								}
-								return $r[0];
-							}
-							return $r;
-						}, array_values( $row ) );
+								return $r;
+							},
+							array_values( $row )
+						);
 						$pagename = str_ireplace( $keys, $replacements, $wgMendeleyPageFormula );
 					}
 
 					$title = Title::newFromText( $pagename );
 					$wikiPage = new WikiPage( $title );
 
-					if ( $wgMendeleyOverwriteTemplateOnly && $wgMendeleyTemplate && $wikiPage->exists() && $wikiPage->getContent() ) {
+					if ( $wgMendeleyOverwriteTemplateOnly && $wgMendeleyTemplate &&
+						$wikiPage->exists() && $wikiPage->getContent()
+					) {
 						$curContent = $wikiPage->getContent()->getWikitextForTransclusion();
 						if ( strpos( $curContent, '{{' . $wgMendeleyTemplate ) !== false ) {
 							// Replace only the template contents
@@ -186,7 +218,7 @@ class Mendeley {
 					}
 
 					// Only modify content if this is not a dry-run
-					if( !$dryRun ) {
+					if ( !$dryRun ) {
 						// Edit target page or push job into queue
 						if ( $wgMendeleyUseJobs ) {
 							$job = new MendeleyImportJob(
@@ -204,17 +236,28 @@ class Mendeley {
 					}
 
 					$pagesLinks[] = $title;
-					$pages ++;
 				}
 				$nextLink = $this->getPaginationLink( $responseHeaders );
 				// @TODO: remove me!
 				if ( $nextLink ) {
-					$result = $this->httpRequest( $nextLink, '', array(), $responseHeaders );
-					if( !$result ) {
+					$result = $this->httpRequest( $nextLink, '', [], $responseHeaders );
+					if ( !$result ) {
 						break;
 					}
 					// Decode the result and loop
-					$result = json_decode( $result, true );
+					$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+					if ( !$status->isGood() ) {
+						wfDebugLog( 'Mendeley', $status->getHTML() );
+					}
+					$result = $status->getValue();
+					if ( isset( $result['errorId'] ) || isset( $result['message'] ) ) {
+						wfDebugLog(
+							'Mendeley',
+							'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) .
+								', message: ' . ( $result['message'] ?? 'empty' )
+						);
+						break;
+					}
 				} else {
 					break;
 				}
@@ -228,8 +271,8 @@ class Mendeley {
 		global $wgMendeleyTemplate;
 		return preg_replace_callback(
 			"/\{\{(([^\{\}]*|(?R))*)\}\}/",
-			function( $matches ) use ( $wgMendeleyTemplate, $replacement ) {
-				if ( strpos($matches[0], "{{".$wgMendeleyTemplate."\n") === 0 ) {
+			static function ( $matches ) use ( $wgMendeleyTemplate, $replacement ) {
+				if ( strpos( $matches[0], "{{" . $wgMendeleyTemplate . "\n" ) === 0 ) {
 					return $replacement;
 				}
 				return $matches[0];
@@ -253,7 +296,9 @@ class Mendeley {
 
 	private function processValue( $property, $value ) {
 		global $wgMendeleyReplaceUnderscoresFields;
-		if ( count($wgMendeleyReplaceUnderscoresFields) && in_array($property, $wgMendeleyReplaceUnderscoresFields) ) {
+		if ( count( $wgMendeleyReplaceUnderscoresFields ) &&
+			in_array( $property, $wgMendeleyReplaceUnderscoresFields )
+		) {
 			$value = str_replace( '_', ' ', $value );
 		}
 		return $value;
@@ -271,14 +316,12 @@ class Mendeley {
 		if ( !is_array( $array ) ) {
 			return false;
 		}
-		$result = array();
+		$result = [];
 		foreach ( $array as $key => $value ) {
 			if ( is_array( $value ) && $this->is_assoc( $value ) ) {
 				$result = array_merge( $result, $this->array_flatten( $value, $key ) );
 			} else {
-				$result = array_merge( $result, array(
-					( $prefix ? $prefix . '/' : '' ) . $key => $value
-				) );
+				$result = array_merge( $result, [ ( $prefix ? $prefix . '/' : '' ) . $key => $value	] );
 			}
 		}
 		return $result;
@@ -303,8 +346,8 @@ class Mendeley {
 			   $wgMendeleyToken, $wgMemCachedServers, $wgObjectCaches;
 
 		// test against $wgMendeleyToken to ensure we want to use the auth code flow
-		if ( !empty($wgMendeleyToken) ) {
-			if ( !count($wgMemCachedServers) && !isset($wgObjectCaches['redis']) ) {
+		if ( !empty( $wgMendeleyToken ) ) {
+			if ( !count( $wgMemCachedServers ) && !isset( $wgObjectCaches['redis'] ) ) {
 				throw new Exception(
 					"The Mendeley extension is configured to use Authorization Code " .
 					"flow but neither Memcached nor Redis cache is found!"
@@ -319,12 +362,27 @@ class Mendeley {
 			"&client_id=$wgMendeleyConsumerKey" .
 			"&client_secret=$wgMendeleyConsumerSecret"
 		);
-		return json_decode( $result )->access_token;
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		if ( !$status->isGood() ) {
+			wfDebugLog( 'Mendeley', $status->getHTML() );
+		}
+		$result = $status->getValue();
+		if ( empty( $result ) || isset( $result['errorId'] ) || isset( $result['message'] ) ) {
+			wfDebugLog(
+				'Mendeley',
+				'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) . ', message: ' . ( $result['message'] ?? 'empty' )
+			);
+		}
+		$access_token = $result['access_token'] ?? '';
+		if ( !$access_token ) {
+			wfDebugLog( 'Mendeley', 'access_token is not defined' );
+		}
+		return $access_token;
 	}
 
 	/**
 	 * Refreshes access token and accuires new refresh token
-	 * @return array|false
+	 * @return bool
 	 */
 	public function refreshAccessToken() {
 		global $wgMendeleyRefreshToken, $wgMendeleyRedirectUrl,
@@ -343,13 +401,30 @@ class Mendeley {
 			. $wgMendeleyConsumerKey
 			. '&client_secret=' . $wgMendeleyConsumerSecret
 		);
-		$result = json_decode( $result );
-		if ( !$result || isset( $result->message ) ) {
-			throw new Exception("Unable to refresh access token! " . $result->message );
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		if ( !$status->isOK() ) {
+			throw new Exception( $status->getHTML() );
+		}
+		if ( !$status->isGood() ) {
+			wfDebugLog( 'Mendeley', $status->getHTML() );
+		}
+		$result = $status->getValue();
+		if ( empty( $result ) || isset( $result['errorId'] ) || isset( $result['message'] ) ) {
+			throw new Exception(
+				'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) . ', message: ' . ( $result['message'] ?? 'empty' )
+			);
+		}
+		$access_token = $result['access_token'] ?? null;
+		if ( !$access_token ) {
+			wfDebugLog( 'Mendeley', 'access_token is empty' );
+		}
+		$refresh_token = $result['refresh_token'] ?? null;
+		if ( !$refresh_token ) {
+			wfDebugLog( 'Mendeley', 'refresh_token is empty' );
 		}
 
-		$this->setToken( $result->access_token, 'access' );
-		$this->setToken( $result->refresh_token, 'refresh' );
+		$this->setToken( $access_token, 'access' );
+		$this->setToken( $refresh_token, 'refresh' );
 
 		return true;
 	}
@@ -362,8 +437,8 @@ class Mendeley {
 		$keyTs = wfMemcKey( 'mendeley_token_ts_' . $token );
 		$ts = $cache->get( $keyTs );
 		$result = $cache->get( $key );
-		if( $result ) {
-			if( $token == 'access' && $ts && time() - $ts >= 3600 ) {
+		if ( $result ) {
+			if ( $token == 'access' && $ts && time() - $ts >= 3600 ) {
 				$this->refreshAccessToken();
 				return $this->getToken( $token );
 			}
@@ -383,40 +458,43 @@ class Mendeley {
 		$cache->set( $keyTs, time() );
 	}
 
-	public function httpRequest($url, $post = "", $headers = array(), &$responseHeaders = array() ) {
+	public function httpRequest( $url, $post = "", $headers = [], &$responseHeaders = [] ) {
 		try {
 			$ch = curl_init();
-			//Change the user agent below suitably
-			curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.9) Gecko/20071025 Firefox/2.0.0.9');
-			curl_setopt($ch, CURLOPT_URL, ($url));
-			curl_setopt($ch, CURLOPT_ENCODING, "UTF-8");
-			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-			curl_setopt($ch, CURLOPT_COOKIESESSION, false);
-			curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-			curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-			curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-			#curl_setopt($ch, CURLOPT_VERBOSE, 1);
-			curl_setopt($ch, CURLOPT_HEADER, 1);
+			// Change the user agent below suitably
+			curl_setopt(
+				$ch,
+				CURLOPT_USERAGENT,
+				'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.9) Gecko/20071025 Firefox/2.0.0.9'
+			);
+			curl_setopt( $ch, CURLOPT_URL, ( $url ) );
+			curl_setopt( $ch, CURLOPT_ENCODING, "UTF-8" );
+			curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+			curl_setopt( $ch, CURLOPT_COOKIESESSION, false );
+			curl_setopt( $ch, CURLOPT_TIMEOUT, 20 );
+			curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, false );
+			curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, false );
+			# curl_setopt($ch, CURLOPT_VERBOSE, 1);
+			curl_setopt( $ch, CURLOPT_HEADER, 1 );
 
-			if (!empty($post)) {
-				curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-				curl_setopt($ch, CURLOPT_POST, 1);
+			if ( !empty( $post ) ) {
+				curl_setopt( $ch, CURLOPT_POSTFIELDS, $post );
+				curl_setopt( $ch, CURLOPT_POST, 1 );
 			}
-			if (!empty($headers)) {
-				curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+			if ( !empty( $headers ) ) {
+				curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
 			}
-			$response = curl_exec($ch);
+			$response = curl_exec( $ch );
 
-			if (!$response) {
-				throw new Exception("Error getting data from server: " . curl_error($ch));
+			if ( !$response ) {
+				throw new Exception( "Error getting data from server: " . curl_error( $ch ) );
 			}
 			$header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
 			$responseHeaders = explode( "\r\n", substr( $response, 0, $header_size ) );
 			$body = substr( $response, $header_size );
 
-			curl_close($ch);
-		}
-		catch (Exception $e) {
+			curl_close( $ch );
+		} catch ( Exception $e ) {
 			echo 'Caught exception: ', $e->getMessage(), "\n";
 			return null;
 		}

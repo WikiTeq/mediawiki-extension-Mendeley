@@ -15,20 +15,18 @@ class PFMendeleyInputDOI extends PFFormInput {
 	}
 
 	public static function getHTML( $cur_value, $input_name, $is_mandatory, $is_disabled, $other_args ) {
-		global $wgOut;
-
 		$className = 'mendeley_input_id';
 		if ( $is_mandatory ) {
 			$className .= ' mandatoryField';
 		}
 
-		$doiInputAttrs = array(
+		$doiInputAttrs = [
 			'disabled' => 'disabled',
 			'class' => $className,
 			'style' => 'margin-top:10px;max-width: 400px;',
 			'placeholder' => 'Document ID (Can be auto populated on selecting title in above field)',
-			'size' => '50'
-		);
+			'size' => '50',
+		];
 
 		$spanClass = 'inputSpan';
 		if ( $is_mandatory ) {
@@ -37,7 +35,7 @@ class PFMendeleyInputDOI extends PFFormInput {
 
 		return Html::rawElement(
 			'span',
-			array( 'class' => $spanClass ),
+			[ 'class' => $spanClass ],
 			Html::input(
 				$input_name,
 				$cur_value,

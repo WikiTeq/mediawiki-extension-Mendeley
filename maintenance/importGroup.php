@@ -14,7 +14,7 @@ class MendeleyImportGroupMaintenance extends Maintenance {
 	public function __construct() {
 		parent::__construct();
 		$this->addDescription( 'Imports group from Mendeley' );
-		$this->addOption('group_id', 'Group id', true, true, 'g');
+		$this->addOption( 'group_id', 'Group id', true, true, 'g' );
 	}
 
 	public function execute() {
@@ -23,13 +23,13 @@ class MendeleyImportGroupMaintenance extends Maintenance {
 		// regardless of the setting
 		$oldGlobal = $wgMendeleyUseJobs;
 		$wgMendeleyUseJobs = false;
-		$this->output('Starting import..');
+		$this->output( 'Starting import..' );
 		$mendeley = Mendeley::getInstance();
-		$result = $mendeley->importGroup( $this->getOption( 'group_id') );
-		foreach ($result as $page) {
-			$this->output("\nImported '".$page->getFullText()."' -> ".$page->getFullURL());
+		$result = $mendeley->importGroup( $this->getOption( 'group_id' ) );
+		foreach ( $result as $page ) {
+			$this->output( "\nImported '" . $page->getFullText() . "' -> " . $page->getFullURL() );
 		}
-		$this->output('Done!');
+		$this->output( 'Done!' );
 		// restore
 		$wgMendeleyUseJobs = $oldGlobal;
 	}

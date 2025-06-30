@@ -23,23 +23,28 @@ class PFMendeleyInput extends PFFormInput {
 		}
 
 		$wgOut->addModules( 'ext.mendeley.main' );
-		$queryInputAttrs = array(
+		$queryInputAttrs = [
 			'class' => $className,
 			'style' => 'max-width: 400px;',
 			'placeholder' => 'Search Document title or author name',
 			'size' => '50'
-		);
+		];
 
 		$spanClass = 'inputSpan';
 		if ( $is_mandatory ) {
 			$spanClass .= ' mandatoryFieldSpan';
 		}
 
-		return Html::rawElement( 'span', array( 'class' => $spanClass ), Html::input( $input_name, $cur_value, 'text', $queryInputAttrs ) );
+		return Html::rawElement(
+			'span',
+			[ 'class' => $spanClass ],
+			Html::input( $input_name, $cur_value, 'text', $queryInputAttrs )
+		);
 	}
 
 	/**
 	 * Returns the HTML code to be included in the output page for this input.
+	 * @return string
 	 */
 	public function getHtmlText() {
 		return self::getHTML(

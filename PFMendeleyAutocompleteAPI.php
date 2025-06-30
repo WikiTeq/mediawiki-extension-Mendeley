@@ -13,24 +13,37 @@ class PFMendeleyAutocompleteAPI extends ApiBase {
 	}
 
 	public function execute() {
-		$term = urlencode( $this->getMain()->getVal('term') );
-
+		$term = urlencode( $this->getMain()->getVal( 'term' ) );
 		$mendeley = Mendeley::getInstance();
-
 		$access_token = $mendeley->getAccessToken();
 
-		$result = $mendeley->httpRequest( "https://api.mendeley.com/search/catalog?query==$term&access_token=$access_token&view=all&limit=20" );
-		$result = json_decode( $result, true );
+		$result = $mendeley->httpRequest(
+			"https://api.mendeley.com/search/catalog?query==$term&access_token=$access_token&view=all&limit=20"
+		);
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		if ( !$status->isGood() ) {
+			wfDebugLog( 'Mendeley', $status->getHTML() );
+		}
+		$result = $status->getValue();
+
 		if ( empty( $result ) ) {
-			$result = $mendeley->httpRequest( "https://api.mendeley.com/catalog?doi=". $term ."&access_token=$access_token&view=all" );
-			$result = json_decode( $result, true );
+			$result = $mendeley->httpRequest(
+				"https://api.mendeley.com/catalog?doi=$term&access_token=$access_token&view=all"
+			);
+			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			if ( !$status->isGood() ) {
+				wfDebugLog( 'Mendeley', $status->getHTML() );
+			}
+			$result = $status->getValue() ?: [];
 		}
 
-		$return_arr = array();
-		foreach( $result as $row ) {
-			$row_arr = array();
+		$return_arr = [];
+		foreach ( $result as $row ) {
+			$row_arr = [];
 			$row_arr['id'] = $row['id'];
-			$row_arr['label'] = strlen( $row['title'] ) > 50 ? substr( $row['title'] ,0 ,50 ) . "..." : $row['title'];
+			$row_arr['label'] = strlen( $row['title'] ) > 50
+				? substr( $row['title'], 0, 50 ) . "..."
+				: $row['title'];
 			$row_arr['value'] = $row['title'];
 			$row_arr['type'] = $row['type'];
 			$row_arr['year'] = $row['year'];
@@ -62,12 +75,12 @@ class PFMendeleyAutocompleteAPI extends ApiBase {
 			$row_arr['genre'] = $row['genre'];
 			$row_arr['country'] = $row['country'];
 			$row_arr['department'] = $row['department'];
-			$authors = array();
-			foreach( $row['authors'] as $author ) {
+			$authors = [];
+			foreach ( $row['authors'] as $author ) {
 				$authors[] = $author['first_name'] . ' ' . $author['last_name'];
 			}
 			$row_arr['authors'] = implode( ', ', $authors );
-			array_push($return_arr, $row_arr);
+			$return_arr[] = $row_arr;
 		}
 		$this->getResult()->addValue( 'result', "autocomplete_results", $return_arr );
 	}

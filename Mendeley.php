@@ -150,7 +150,7 @@ class Mendeley {
 						foreach ( $appendProps as $k => $v ) {
 							$pattern = substr( $v, strpos( $v, '[' ) + 1 );
 							$pattern = substr( $pattern, 0, strpos( $pattern, ']' ) );
-							$value = preg_replace_callback( '/\<([a-z]+)\>/', static function ( $m ) use ( $row ) {
+							$value = preg_replace_callback( '/<([a-z]+)>/', static function ( $m ) use ( $row ) {
 								if ( isset( $row[$m[1]] ) ) {
 									return $row[$m[1]];
 								}
@@ -205,6 +205,10 @@ class Mendeley {
 					}
 
 					$title = Title::newFromText( $pagename );
+					if ( !$title ) {
+						wfDebugLog( 'Mendeley', 'Cannot create the Title object for sting "' . $pagename . '"!' );
+						continue;
+					}
 					$wikiPage = new WikiPage( $title );
 
 					if ( $wgMendeleyOverwriteTemplateOnly && $wgMendeleyTemplate &&

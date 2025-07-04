@@ -38,11 +38,9 @@ class MendeleyHooks {
 
 		$document_key = $options['doi'] ?? $options['id'];
 
-		// CACHE_DB is slow but we can cache more items - which is likely what we want
-		$cache_object = ObjectCache::getInstance( CACHE_DB );
-
-		// Check cache first
-		$cacheProp = unserialize( $cache_object->get( $document_key ) );
+		$cache = wfGetCache( CACHE_ANYTHING );
+		$key = wfMemcKey( 'mendeley_document_' . $document_key );
+		$cacheProp = unserialize( $cache->get( $key ) );
 
 		if ( $cacheProp && !isset( $cacheProp['errorId'] ) ) {
 			return self::getArrayElementFromPath( $cacheProp, $parameter );
@@ -79,7 +77,7 @@ class MendeleyHooks {
 
 		// Store in Cache
 		$serialized = serialize( $result );
-		$cache_object->set( $document_key, $serialized, 5 * 24 * 60 * 60 );
+		$cache->set( $key, $serialized, 5 * 24 * 60 * 60 );
 
 		return self::getArrayElementFromPath( $result, $parameter );
 	}

@@ -24,6 +24,7 @@ class MendeleyWipeGroupMaintenance extends Maintenance {
 		$oldGlobal = $wgMendeleyUseJobs;
 		$wgMendeleyUseJobs = false;
 		$this->output( 'Starting wiping..' );
+		/** @phan-suppress-next-line PhanUndeclaredClassMethod */
 		$mendeley = Mendeley::getInstance();
 		$result = $mendeley->importGroup( $this->getOption( 'group_id' ), null, true );
 		foreach ( $result as $page ) {

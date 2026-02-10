@@ -3,6 +3,24 @@
 class MendeleyHooks {
 
 	/**
+	 * Register database schema updates for mendeley_oauth_tokens table.
+	 *
+	 * @param DatabaseUpdater $updater
+	 */
+	public static function onLoadExtensionSchemaUpdates( $updater ) {
+		$updater->addExtensionTable( 'mendeley_oauth_tokens', __DIR__ . '/sql/mendeley_oauth_tokens.sql' );
+	}
+
+	/**
+	 * Register PHPUnit test paths for the extension.
+	 *
+	 * @param array &$paths List of test paths (files or directories)
+	 */
+	public static function onUnitTestsList( &$paths ) {
+		$paths[] = __DIR__ . '/tests/phpunit';
+	}
+
+	/**
 	 * Sets up the parser function
 	 *
 	 * @param Parser $parser
@@ -38,33 +56,39 @@ class MendeleyHooks {
 
 		$document_key = $options['doi'] ?? $options['id'];
 
-		$cache = wfGetCache( CACHE_ANYTHING );
-		$key = wfMemcKey( 'mendeley_document_' . $document_key );
-		$cacheProp = unserialize( $cache->get( $key ) );
+		// CACHE_DB is slow but we can cache more items - which is likely what we want
+		$cache_object = ObjectCache::getInstance( CACHE_DB );
 
-		if ( $cacheProp && !isset( $cacheProp['errorId'] ) ) {
+		// Check cache first (use JSON instead of serialize for security)
+		$cached = $cache_object->get( $document_key );
+		$cacheProp = null;
+		if ( $cached !== false ) {
+			$status = FormatJson::parse( $cached, FormatJson::FORCE_ASSOC );
+			$cacheProp = $status->isOK() ? $status->getValue() : null;
+		}
+
+		if ( $cacheProp && is_array( $cacheProp ) && !isset( $cacheProp['errorId'] ) ) {
 			return self::getArrayElementFromPath( $cacheProp, $parameter );
 		}
 		$access_token = $mendeley->getAccessToken();
 
+		$result = [];
 		if ( isset( $options['doi'] ) ) {
-			$result = $mendeley->httpRequest(
-				"https://api.mendeley.com/catalog?doi={$options['doi']}&access_token=$access_token&view=all"
-			);
-			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			$raw = $mendeley->httpRequest( "https://api.mendeley.com/catalog?doi=" . urlencode( $options['doi'] ) . "&access_token=$access_token&view=all" );
+			$status = FormatJson::parse( $raw, FormatJson::FORCE_ASSOC );
 			if ( !$status->isGood() ) {
 				wfDebugLog( 'Mendeley', $status->getHTML() );
 			}
-			$result = $status->getValue()[0] ?? $status->getValue();
+			$decoded = $status->isOK() ? $status->getValue() : null;
+			$result = ( is_array( $decoded ) && isset( $decoded[0] ) ) ? $decoded[0] : ( $decoded ?: [] );
 		} else {
-			$result = $mendeley->httpRequest(
-				"https://api.mendeley.com/catalog/{$options['id']}?access_token=$access_token&view=all"
-			);
-			$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+			$raw = $mendeley->httpRequest( "https://api.mendeley.com/catalog/" . urlencode( $options['id'] ) . "?access_token=$access_token&view=all" );
+			$status = FormatJson::parse( $raw, FormatJson::FORCE_ASSOC );
 			if ( !$status->isGood() ) {
 				wfDebugLog( 'Mendeley', $status->getHTML() );
 			}
-			$result = $status->getValue();
+			$decoded = $status->isOK() ? $status->getValue() : null;
+			$result = $decoded ?: [];
 		}
 
 		if ( empty( $result ) || isset( $result['errorId'] ) || isset( $result['message'] ) ) {
@@ -75,9 +99,8 @@ class MendeleyHooks {
 			return '';
 		}
 
-		// Store in Cache
-		$serialized = serialize( $result );
-		$cache->set( $key, $serialized, 5 * 24 * 60 * 60 );
+		// Store in Cache (use JSON instead of serialize for security)
+		$cache_object->set( $document_key, FormatJson::encode( $result ), 5 * 24 * 60 * 60 );
 
 		return self::getArrayElementFromPath( $result, $parameter );
 	}

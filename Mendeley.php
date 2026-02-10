@@ -6,6 +6,14 @@ class Mendeley {
 	 * @var self
 	 */
 	private static $instance;
+	private $tokenFails = 0;
+	/** @var array|null Last token endpoint response (for debug), access_token masked */
+	public $lastTokenResponse = null;
+	/** @var string Source of last token: 'cache', 'config', 'db', 'client_credentials' */
+	public $mLastTokenSource = '';
+
+	private const CACHE_TTL_SEC = 3600;
+	private const OAUTH_TOKENS_TABLE = 'mendeley_oauth_tokens';
 
 	/**
 	 * @return self
@@ -61,12 +69,14 @@ class Mendeley {
 		}
 		$result = $status->getValue();
 
-		// Token has expired: oauth/TOKEN_EXPIRED
-		// This is necessary because we don't know initial token issue timestamp
+		// Token has expired or invalid (e.g. 401)
 		if ( isset( $result['errorId'] ) ) {
-			// refresh token
-			wfDebugLog( 'Mendeley', $result['message'] );
-			$this->refreshAccessToken();
+			wfDebugLog( 'Mendeley', $result['message'] ?? 'API error' );
+			if ( $this->mLastTokenSource === 'db' ) {
+				$this->markStoredTokensInvalid();
+			} elseif ( $this->mLastTokenSource === 'config' ) {
+				$this->refreshAccessToken();
+			}
 			$access_token = $this->getAccessToken();
 			$responseHeaders = [];
 			$result = $this->httpRequest(
@@ -235,7 +245,8 @@ class Mendeley {
 							JobQueueGroup::singleton()->push( $job );
 						} else {
 							$content = ContentHandler::makeContent( $text, $title );
-							$wikiPage->doEditContent( $content, "Importing document found in group" );
+							$user = $actorId ? User::newFromId( $actorId ) : null;
+							$wikiPage->doEditContent( $content, "Importing document found in group", 0, false, $user );
 						}
 					}
 
@@ -300,8 +311,9 @@ class Mendeley {
 
 	private function processValue( $property, $value ) {
 		global $wgMendeleyReplaceUnderscoresFields;
-		if ( count( $wgMendeleyReplaceUnderscoresFields ) &&
-			in_array( $property, $wgMendeleyReplaceUnderscoresFields )
+		if ( is_array( $wgMendeleyReplaceUnderscoresFields ?? null )
+			&& count( $wgMendeleyReplaceUnderscoresFields ) > 0
+			&& in_array( $property, $wgMendeleyReplaceUnderscoresFields, true )
 		) {
 			$value = str_replace( '_', ' ', $value );
 		}
@@ -347,41 +359,80 @@ class Mendeley {
 
 	public function getAccessToken() {
 		global $wgMendeleyConsumerKey, $wgMendeleyConsumerSecret,
-			   $wgMendeleyToken, $wgMemCachedServers, $wgObjectCaches;
+			   $wgMendeleyToken, $wgMendeleyRefreshToken, $wgMemCachedServers, $wgObjectCaches;
 
-		// test against $wgMendeleyToken to ensure we want to use the auth code flow
-		if ( !empty( $wgMendeleyToken ) ) {
+		$cache = wfGetCache( CACHE_ANYTHING );
+		$keyAccess = wfMemcKey( 'mendeley_token_access' );
+		$keyTs = wfMemcKey( 'mendeley_token_ts_access' );
+		$cachedAccess = $cache->get( $keyAccess );
+		$cachedTs = $cache->get( $keyTs );
+		if ( $cachedAccess && $cachedTs && ( time() - (int)$cachedTs < self::CACHE_TTL_SEC ) ) {
+			$this->mLastTokenSource = 'cache';
+			return $cachedAccess;
+		}
+
+		if ( !empty( $wgMendeleyToken ) && !empty( $wgMendeleyRefreshToken ) ) {
 			if ( !count( $wgMemCachedServers ) && !isset( $wgObjectCaches['redis'] ) ) {
 				throw new Exception(
 					"The Mendeley extension is configured to use Authorization Code " .
 					"flow but neither Memcached nor Redis cache is found!"
 				);
 			}
+			$this->mLastTokenSource = 'config';
 			return $this->getToken( 'access' );
 		}
-		$result = $this->httpRequest(
-			"https://api.mendeley.com/oauth/token",
-			"grant_type=client_credentials" .
+
+		$stored = $this->getStoredTokensFromDB( true );
+		if ( $stored ) {
+			$tokens = $this->doRefreshWithRefreshToken( $stored['refresh_token'] );
+			if ( $tokens ) {
+				$this->setStoredTokensInDB( $tokens['access_token'], $tokens['refresh_token'], 1 );
+				$this->mLastTokenSource = 'db';
+				return $tokens['access_token'];
+			}
+			$responseHeaders = [];
+			$testResult = $this->httpRequest(
+				"https://api.mendeley.com/documents?limit=1&access_token=" . urlencode( $stored['access_token'] ),
+				'',
+				[],
+				$responseHeaders
+			);
+			$testStatus = $testResult ? FormatJson::parse( $testResult, FormatJson::FORCE_ASSOC ) : null;
+			$testDecoded = ( $testStatus && $testStatus->isOK() ) ? $testStatus->getValue() : null;
+			$is401 = ( $testDecoded && isset( $testDecoded['errorId'] ) );
+			if ( !$is401 && $testResult !== null ) {
+				$this->setStoredTokensInDB( $stored['access_token'], $stored['refresh_token'], 1 );
+				$this->mLastTokenSource = 'db';
+				return $stored['access_token'];
+			}
+			$this->markStoredTokensInvalid();
+		}
+
+		$this->mLastTokenSource = 'client_credentials';
+		$postBody = "grant_type=client_credentials" .
 			"&scope=all" .
 			"&client_id=$wgMendeleyConsumerKey" .
-			"&client_secret=$wgMendeleyConsumerSecret"
+			"&client_secret=$wgMendeleyConsumerSecret";
+		$result = $this->httpRequest(
+			"https://api.mendeley.com/oauth/token",
+			$postBody
 		);
 		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
-		if ( !$status->isGood() ) {
-			wfDebugLog( 'Mendeley', $status->getHTML() );
+		$decoded = $status->isOK() ? $status->getValue() : null;
+		$this->lastTokenResponse = $decoded ?: [ '_raw' => $result ];
+		$this->lastTokenResponse['request_debug'] = [
+			'client_id_in_request' => (string)$wgMendeleyConsumerKey,
+			'body_has_client_id' => strpos( $postBody, 'client_id=' ) !== false,
+			'body_length' => strlen( $postBody ),
+		];
+		if ( is_array( $this->lastTokenResponse ) && isset( $this->lastTokenResponse['access_token'] ) ) {
+			$this->lastTokenResponse['access_token'] = '***' . substr( $this->lastTokenResponse['access_token'], -4 );
 		}
-		$result = $status->getValue();
-		if ( empty( $result ) || isset( $result['errorId'] ) || isset( $result['message'] ) ) {
-			wfDebugLog(
-				'Mendeley',
-				'ErrorId: ' . ( $result['errorId'] ?? 'unknown' ) . ', message: ' . ( $result['message'] ?? 'empty' )
-			);
+		if ( !$decoded || !isset( $decoded['access_token'] ) ) {
+			$msg = $status->isOK() ? ( is_array( $decoded ) ? ( $decoded['message'] ?? $decoded['error'] ?? FormatJson::encode( $decoded ) ) : $result ) : $status->getHTML();
+			throw new Exception( 'Mendeley token endpoint failed: ' . $msg );
 		}
-		$access_token = $result['access_token'] ?? '';
-		if ( !$access_token ) {
-			wfDebugLog( 'Mendeley', 'access_token is not defined' );
-		}
-		return $access_token;
+		return $decoded['access_token'];
 	}
 
 	/**
@@ -389,11 +440,10 @@ class Mendeley {
 	 * @return bool
 	 */
 	public function refreshAccessToken() {
-		global $wgMendeleyRefreshToken, $wgMendeleyRedirectUrl,
-			   $wgMendeleyConsumerKey, $wgMendeleyConsumerSecret;
+		global $wgMendeleyRefreshToken, $wgMendeleyConsumerKey, $wgMendeleyConsumerSecret;
 
 		// check for refresh token setting presence to ensure it was initially set
-		if ( !$wgMendeleyRefreshToken || !$wgMendeleyRedirectUrl ) {
+		if ( !$wgMendeleyRefreshToken ) {
 			return false;
 		}
 
@@ -462,46 +512,173 @@ class Mendeley {
 		$cache->set( $keyTs, time() );
 	}
 
-	public function httpRequest( $url, $post = "", $headers = [], &$responseHeaders = [] ) {
-		try {
-			$ch = curl_init();
-			// Change the user agent below suitably
-			curl_setopt(
-				$ch,
-				CURLOPT_USERAGENT,
-				'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.9) Gecko/20071025 Firefox/2.0.0.9'
-			);
-			curl_setopt( $ch, CURLOPT_URL, ( $url ) );
-			curl_setopt( $ch, CURLOPT_ENCODING, "UTF-8" );
-			curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-			curl_setopt( $ch, CURLOPT_COOKIESESSION, false );
-			curl_setopt( $ch, CURLOPT_TIMEOUT, 20 );
-			curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, false );
-			curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, false );
-			# curl_setopt($ch, CURLOPT_VERBOSE, 1);
-			curl_setopt( $ch, CURLOPT_HEADER, 1 );
-
-			if ( !empty( $post ) ) {
-				curl_setopt( $ch, CURLOPT_POSTFIELDS, $post );
-				curl_setopt( $ch, CURLOPT_POST, 1 );
-			}
-			if ( !empty( $headers ) ) {
-				curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
-			}
-			$response = curl_exec( $ch );
-
-			if ( !$response ) {
-				throw new Exception( "Error getting data from server: " . curl_error( $ch ) );
-			}
-			$header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
-			$responseHeaders = explode( "\r\n", substr( $response, 0, $header_size ) );
-			$body = substr( $response, $header_size );
-
-			curl_close( $ch );
-		} catch ( Exception $e ) {
-			echo 'Caught exception: ', $e->getMessage(), "\n";
+	/**
+	 * Read stored OAuth tokens from DB (singleton row).
+	 *
+	 * @param bool $includeInvalid If true, return row even when moa_valid = 0
+	 * @return array|null [ 'access_token', 'refresh_token', 'updated', 'valid' ] or null
+	 */
+	public function getStoredTokensFromDB( $includeInvalid = false ) {
+		$db = wfGetDB( DB_REPLICA );
+		$conds = [];
+		if ( !$includeInvalid ) {
+			$conds['moa_valid'] = 1;
+		}
+		$row = $db->selectRow(
+			self::OAUTH_TOKENS_TABLE,
+			[ 'moa_access_token', 'moa_refresh_token', 'moa_valid', 'moa_updated' ],
+			$conds,
+			__METHOD__
+		);
+		if ( !$row ) {
 			return null;
 		}
+		return [
+			'access_token' => $row->moa_access_token,
+			'refresh_token' => $row->moa_refresh_token,
+			'updated' => (int)$row->moa_updated,
+			'valid' => (int)$row->moa_valid,
+		];
+	}
+
+	/**
+	 * Insert or update stored OAuth tokens in DB and optionally update access-token cache.
+	 *
+	 * @param string $access Access token
+	 * @param string $refresh Refresh token
+	 * @param int $valid 1 or 0
+	 */
+	public function setStoredTokensInDB( $access, $refresh, $valid = 1 ) {
+		$db = wfGetDB( DB_MASTER );
+		$row = $db->selectRow( self::OAUTH_TOKENS_TABLE, [ 'moa_id' ], [], __METHOD__ );
+		$ts = (int)time();
+		$rowData = [
+			'moa_access_token' => $access,
+			'moa_refresh_token' => $refresh,
+			'moa_valid' => $valid ? 1 : 0,
+			'moa_updated' => $ts,
+		];
+		if ( $row ) {
+			$db->update( self::OAUTH_TOKENS_TABLE, $rowData, [ 'moa_id' => $row->moa_id ], __METHOD__ );
+		} else {
+			$db->insert( self::OAUTH_TOKENS_TABLE, array_merge( [ 'moa_id' => 1 ], $rowData ), __METHOD__ );
+		}
+		// Update access-token cache so next getAccessToken() can use cache
+		$cache = wfGetCache( CACHE_ANYTHING );
+		$cache->set( wfMemcKey( 'mendeley_token_access' ), $access, self::CACHE_TTL_SEC );
+		$cache->set( wfMemcKey( 'mendeley_token_ts_access' ), $ts, self::CACHE_TTL_SEC );
+	}
+
+	/**
+	 * Mark stored tokens as invalid (moa_valid = 0) and clear access-token cache.
+	 * Does not delete the row; deletion is only via deleteStoredTokensFromDB() from Special page.
+	 */
+	public function markStoredTokensInvalid() {
+		$db = wfGetDB( DB_MASTER );
+		$db->update( self::OAUTH_TOKENS_TABLE, [ 'moa_valid' => 0 ], [ 'moa_id' => 1 ], __METHOD__ );
+		$cache = wfGetCache( CACHE_ANYTHING );
+		$cache->delete( wfMemcKey( 'mendeley_token_access' ) );
+		$cache->delete( wfMemcKey( 'mendeley_token_ts_access' ) );
+	}
+
+	/**
+	 * Delete the stored OAuth tokens row from DB. Only to be called from Special:MendeleyAuth "Delete".
+	 */
+	public function deleteStoredTokensFromDB() {
+		$db = wfGetDB( DB_MASTER );
+		$db->delete( self::OAUTH_TOKENS_TABLE, [ 'moa_id' => 1 ], __METHOD__ );
+		$cache = wfGetCache( CACHE_ANYTHING );
+		$cache->delete( wfMemcKey( 'mendeley_token_access' ) );
+		$cache->delete( wfMemcKey( 'mendeley_token_ts_access' ) );
+	}
+
+	/**
+	 * Refresh access token using a given refresh token (e.g. from DB).
+	 *
+	 * @param string $refreshToken
+	 * @return array|null [ 'access_token', 'refresh_token' ] or null on failure
+	 */
+	public function doRefreshWithRefreshToken( $refreshToken ) {
+		global $wgMendeleyConsumerKey, $wgMendeleyConsumerSecret;
+		if ( !$refreshToken ) {
+			return null;
+		}
+		$postBody = "grant_type=refresh_token&refresh_token=" . urlencode( $refreshToken )
+			. "&client_id=" . urlencode( $wgMendeleyConsumerKey )
+			. "&client_secret=" . urlencode( $wgMendeleyConsumerSecret );
+		$result = $this->httpRequest( "https://api.mendeley.com/oauth/token", $postBody );
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		$decoded = $status->isOK() ? $status->getValue() : null;
+		if ( !$decoded || !isset( $decoded['access_token'] ) ) {
+			return null;
+		}
+		return [
+			'access_token' => $decoded['access_token'],
+			'refresh_token' => isset( $decoded['refresh_token'] ) ? $decoded['refresh_token'] : $refreshToken,
+		];
+	}
+
+	/**
+	 * Exchange authorization code for access and refresh tokens.
+	 *
+	 * @param string $code Authorization code from Mendeley redirect
+	 * @param string $redirectUri Redirect URI used in the authorize request
+	 * @return array [ 'access_token' => ..., 'refresh_token' => ... ] or throw
+	 */
+	public function exchangeCodeForTokens( $code, $redirectUri ) {
+		global $wgMendeleyConsumerKey, $wgMendeleyConsumerSecret;
+		$postBody = http_build_query( [
+			'grant_type' => 'authorization_code',
+			'code' => $code,
+			'redirect_uri' => $redirectUri,
+			'client_id' => $wgMendeleyConsumerKey,
+			'client_secret' => $wgMendeleyConsumerSecret,
+		] );
+		$result = $this->httpRequest( 'https://api.mendeley.com/oauth/token', $postBody );
+		$status = FormatJson::parse( $result, FormatJson::FORCE_ASSOC );
+		$decoded = $status->isOK() ? $status->getValue() : null;
+		$this->lastTokenResponse = $decoded ?: [ '_raw' => $result ];
+		if ( !$decoded || !isset( $decoded['access_token'] ) ) {
+			$msg = $status->isOK() ? ( is_array( $decoded ) ? ( $decoded['message'] ?? $decoded['error'] ?? FormatJson::encode( $decoded ) ) : $result ) : $status->getHTML();
+			throw new Exception( 'Mendeley token exchange failed: ' . $msg );
+		}
+		return [
+			'access_token' => $decoded['access_token'],
+			'refresh_token' => isset( $decoded['refresh_token'] ) ? $decoded['refresh_token'] : '',
+		];
+	}
+
+	public function httpRequest( $url, $post = "", $headers = [], &$responseHeaders = [] ) {
+		$ch = curl_init();
+		$userAgent = 'Mendeley-MediaWiki/' . ( defined( 'MW_VERSION' ) ? MW_VERSION : '0.2' );
+		curl_setopt( $ch, CURLOPT_USERAGENT, $userAgent );
+		curl_setopt( $ch, CURLOPT_URL, $url );
+		curl_setopt( $ch, CURLOPT_ENCODING, "UTF-8" );
+		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+		curl_setopt( $ch, CURLOPT_COOKIESESSION, false );
+		curl_setopt( $ch, CURLOPT_TIMEOUT, 20 );
+		curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, 2 );
+		curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, true );
+		curl_setopt( $ch, CURLOPT_HEADER, 1 );
+
+		if ( !empty( $post ) ) {
+			curl_setopt( $ch, CURLOPT_POSTFIELDS, $post );
+			curl_setopt( $ch, CURLOPT_POST, 1 );
+		}
+		if ( !empty( $headers ) ) {
+			curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
+		}
+		$response = curl_exec( $ch );
+
+		if ( $response === false ) {
+			wfDebugLog( 'Mendeley', 'HTTP request failed: ' . curl_error( $ch ) );
+			curl_close( $ch );
+			return null;
+		}
+		$header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
+		$responseHeaders = explode( "\r\n", substr( $response, 0, $header_size ) );
+		$body = substr( $response, $header_size );
+		curl_close( $ch );
 		return $body;
 	}
 

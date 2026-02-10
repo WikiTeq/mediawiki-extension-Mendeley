@@ -18,7 +18,8 @@
 		"pfmendeley": "PFMendeleyAutocompleteAPI"
 	},
 	"SpecialPages": {
-		"MendeleyImport": "SpecialMendeleyImport"
+		"MendeleyImport": "SpecialMendeleyImport",
+		"MendeleyAuth": "SpecialMendeleyAuth"
 	},
 	"AutoloadClasses": {
 		"SpecialMendeleyImport": "SpecialMendeleyImport.php",
@@ -27,7 +28,8 @@
 		"PFMendeleyInputDOI": "PFMendeleyInputDOI.php",
 		"PFMendeleyAutocompleteAPI": "PFMendeleyAutocompleteAPI.php",
 		"Mendeley": "Mendeley.php",
-		"MendeleyImportJob": "MendeleyImportJob.php"
+		"MendeleyImportJob": "MendeleyImportJob.php",
+		"SpecialMendeleyAuth": "SpecialMendeleyAuth.php"
 	},
 	"config": {
 		"MendeleyConsumerKey": null,
@@ -38,16 +40,17 @@
 		"MendeleyTemplateFields": [],
 		"MendeleyTemplateFieldsMapDelimiter": ";",
 		"MendeleyPageFormula": null,
-		"MendeleyRedirectUrl": null,
 		"MendeleyFieldValuesDelimiter": " ",
 		"MendeleyAppendFieldValuesDelimiter": "/",
 		"MendeleyReplaceUnderscores": false,
+		"MendeleyReplaceUnderscoresFields": [],
 		"MendeleyOverwriteTemplateOnly": false,
 		"MendeleyImportPageLimit": 500,
 		"MendeleyUseJobs": false
 	},
 	"ExtensionMessagesFiles": {
-		"MendeleyHooksMagic": "Mendeley.i18n.magic.php"
+		"MendeleyHooksMagic": "Mendeley.i18n.magic.php",
+		"MendeleyAlias": "Mendeley.alias.php"
 	},
 	"Hooks": {
 		"ParserFirstCallInit": [
@@ -55,6 +58,12 @@
 		],
 		"PageForms::FormPrinterSetup": [
 			"MendeleyHooks::onFormPrinterSetup"
+		],
+		"LoadExtensionSchemaUpdates": [
+			"MendeleyHooks::onLoadExtensionSchemaUpdates"
+		],
+		"UnitTestsList": [
+			"MendeleyHooks::onUnitTestsList"
 		]
 	},
 	"ResourceModules": {
@@ -77,6 +86,16 @@
 	},
 	"JobClasses": {
 		"MendeleyImportJob": "MendeleyImportJob"
+	},
+	"AvailableRights": [
+		"mendeleyoauth",
+		"mendeleyimport"
+	],
+	"GroupPermissions": {
+		"sysop": {
+			"mendeleyoauth": true,
+			"mendeleyimport": true
+		}
 	},
 	"manifest_version": 1
 }

@@ -1,0 +1,43 @@
+# Composer
+/vendor/
+/composer.phar
+
+# Node (if used)
+/node_modules/
+
+# Phan local overrides
+/.phan/local-config.php
+
+# PHPUnit
+.phpunit.result.cache
+phpunit.xml
+
+# Editors
+*.kate-swp
+*~
+\#*#
+.#*
+.*.swp
+.project
+.buildpath
+.classpath
+.settings
+cscope.files
+cscope.out
+*.orig
+nbproject*
+project.index
+sublime-*
+sftp-config.json
+
+# IDEs
+.idea/
+*.iml
+
+# Linters/cache
+.eslintcache
+.stylelintcache
+
+# OS
+.DS_Store
+Thumbs.db

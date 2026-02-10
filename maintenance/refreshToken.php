@@ -18,6 +18,7 @@ class MendeleyRefreshTokenMaintenance extends Maintenance {
 
 	public function execute() {
 		$this->output( 'Starting..' );
+		/** @phan-suppress-next-line PhanUndeclaredClassMethod */
 		$mendeley = Mendeley::getInstance();
 		$mendeley->refreshAccessToken();
 		$this->output( 'Done!' );

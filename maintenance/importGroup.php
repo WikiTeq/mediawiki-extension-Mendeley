@@ -24,6 +24,7 @@ class MendeleyImportGroupMaintenance extends Maintenance {
 		$oldGlobal = $wgMendeleyUseJobs;
 		$wgMendeleyUseJobs = false;
 		$this->output( 'Starting import..' );
+		/** @phan-suppress-next-line PhanUndeclaredClassMethod */
 		$mendeley = Mendeley::getInstance();
 		$result = $mendeley->importGroup( $this->getOption( 'group_id' ) );
 		foreach ( $result as $page ) {

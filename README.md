@@ -5,29 +5,33 @@ A MediaWiki Extension to work with the Mendeley API
 # Setup 
 
 * Create new application at https://dev.mendeley.com/myapps.html
-* Set `$wgMendeleyConsumerKey` to app `ID` and `MendeleyConsumerSecret` to app `SECRET` values
-* Set `$wgMendeleyRedirectUrl` to the app redirect URL
+* Set `$wgMendeleyConsumerKey` to app `ID` and `$wgMendeleyConsumerSecret` to app `SECRET` values
+* On **Special:MendeleyAuth** you will see the redirect URL to use in your Mendeley app settings (it is built automatically from your wiki URL)
 
 That's all!
 
 # Setup for private spaces
 
-If you want to be able to fetch data from private groups & resources on Mendeley you'll need to
-do some extra configurations in addition to the above:
+To fetch data from private groups and resources on Mendeley you need OAuth tokens. The preferred way is to obtain them via the extension:
 
-* Navigate to https://mendeley-show-me-access-tokens.herokuapp.com/ and login with your Mendeley credentials
-* Set `$wgMendeleyToken` to the `Access token` value
-* Set `$wgMendeleyRefreshToken` to the `Refresh token` value
+* Go to **Special:MendeleyAuth** and use "Connect with Mendeley" to complete the OAuth flow. Tokens are stored in the database (table `mendeley_oauth_tokens`). When a cache (Memcached or Redis) is available, the access token is cached for about an hour to reduce database reads.
+* On Special:MendeleyAuth you can **Check** (test the stored token), **Refresh** (get a new access token), or **Delete** (remove the stored tokens from the database). If the API returns 401 or refresh fails, tokens are only marked invalid (`moa_valid = 0`); they are not deleted. Only the "Delete" button removes the row from the database.
 
-The authorization code flow token has a lifetime of 1 hour, it'll be automatically renewed as soon as it expires,
-however, you can also use `maintenance/refreshToken.php` to force the token refresh.
+**Fallback:** You can still set `$wgMendeleyToken` and `$wgMendeleyRefreshToken` in LocalSettings.php (e.g. from another source). Token resolution order is: cache → config → database (including invalid rows; on successful use they are marked valid again) → client credentials.
 
-**Important:** Memcached or Redis is required for this! Ensure you have one of these installed on your server
-and configured as main cache type, eg:
+**Important (when using config tokens):** Memcached or Redis is required if you use `$wgMendeleyToken` / `$wgMendeleyRefreshToken`. Ensure one of these is configured as main cache type, e.g.:
 
 ```
 $wgMemCachedServers = [ '127.0.0.1:11211' ];
 $wgMainCacheType = CACHE_MEMCACHED;
+```
+
+You can also use `maintenance/refreshToken.php` to force a token refresh when using config-based tokens.
+
+For troubleshooting, enable the Mendeley debug log in LocalSettings.php:
+
+```php
+$wgDebugLogGroups['Mendeley'] = '/var/log/mediawiki/mendeley.log';
 ```
 
 # Usage
@@ -74,5 +78,27 @@ You can also import groups via `maintenance/importGroup.php` script:
 ```
 php maintenance/importGroup.php --group_id XXX
 ```
+
+## Testing
+
+### PHPUnit
+
+The extension includes PHPUnit integration tests. From the MediaWiki root (with Mendeley enabled):
+
+```bash
+php tests/phpunit/phpunit.php extensions/Mendeley/tests/phpunit/
+```
+
+### Phan (static analysis)
+
+Phan is configured for the extension. From the extension directory:
+
+```bash
+cd extensions/Mendeley
+composer install
+MW_INSTALL_PATH=/path/to/mediawiki vendor/bin/phan -d . --long-progress-bar
+```
+
+**Note:** Phan 3.2.x (used by mediawiki-phan-config 0.10.6) has compatibility issues with PHP 8.2. Use PHP 7.4 or 8.0 for running Phan.
 
 Please see more at https://www.mediawiki.org/wiki/Extension:Mendeley

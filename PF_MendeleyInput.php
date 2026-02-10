@@ -26,7 +26,7 @@ class PFMendeleyInput extends PFFormInput {
 		$queryInputAttrs = [
 			'class' => $className,
 			'style' => 'max-width: 400px;',
-			'placeholder' => 'Search Document title or author name',
+			'placeholder' => wfMessage( 'mendeleyinput-placeholder' )->text(),
 			'size' => '50'
 		];
 

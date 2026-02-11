@@ -42,7 +42,8 @@ class SpecialMendeleyImport extends SpecialPage {
 					'id' => 'mendeley_dry',
 					'name' => 'mendeley_dry',
 					'type' => 'checkbox',
-					'value' => '1'
+					'value' => '1',
+					'checked' => 'checked'
 				] ) .
 				Html::element( 'label', [ 'for' => 'mendeley_dry' ], $this->msg( 'mendeleyimport-dry-run' )->text() )
 			) . "<br><br>"

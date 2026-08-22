@@ -10,6 +10,7 @@ class SpecialMendeleyImport extends SpecialPage {
 	 */
 	public function execute( $par ) {
 		$this->setHeaders();
+		$this->checkReadOnly();
 		$request = $this->getRequest();
 		$out = $this->getOutput();
 
@@ -36,11 +37,17 @@ class SpecialMendeleyImport extends SpecialPage {
 		);
 
 		$out->addHTML(
+			Html::hidden( 'wptoken', $this->getContext()->getCsrfTokenSet()->getToken()->toString() ) .
 			Html::submitButton( "Submit", array() ) .
 			Html::closeElement( 'form' )
 		);
 
-		if ( $group_id ) {
+		if ( $group_id && $request->wasPosted() ) {
+			if ( !$this->getContext()->getCsrfTokenSet()->matchesToken(
+				$request->getVal( 'wptoken' )
+			) ) {
+				throw new PermissionsError( 'mendeleyimport' );
+			}
 			$this->handleImport( $group_id, $dry );
 		}
 	}

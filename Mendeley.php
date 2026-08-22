@@ -384,8 +384,8 @@ class Mendeley {
 	}
 
 	public function httpRequest($url, $post = "", $headers = array(), &$responseHeaders = array() ) {
+		$ch = curl_init();
 		try {
-			$ch = curl_init();
 			//Change the user agent below suitably
 			curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.9) Gecko/20071025 Firefox/2.0.0.9');
 			curl_setopt($ch, CURLOPT_URL, ($url));
@@ -413,12 +413,13 @@ class Mendeley {
 			$header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
 			$responseHeaders = explode( "\r\n", substr( $response, 0, $header_size ) );
 			$body = substr( $response, $header_size );
-
-			curl_close($ch);
 		}
 		catch (Exception $e) {
-			echo 'Caught exception: ', $e->getMessage(), "\n";
+			wfDebugLog( 'Mendeley', 'HTTP request to ' . $url . ' failed: ' . $e->getMessage() );
 			return null;
+		}
+		finally {
+			curl_close($ch);
 		}
 		return $body;
 	}

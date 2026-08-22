@@ -344,7 +344,12 @@ class Mendeley {
 			. '&client_secret=' . $wgMendeleyConsumerSecret
 		);
 		$result = json_decode( $result );
-		if ( !$result || isset( $result->message ) ) {
+		if ( !$result ) {
+			throw new Exception(
+				"Unable to refresh access token: empty or malformed response"
+			);
+		}
+		if ( isset( $result->message ) ) {
 			throw new Exception("Unable to refresh access token! " . $result->message );
 		}
 

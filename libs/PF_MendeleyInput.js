@@ -7,6 +7,15 @@ jQuery(document).ready( function() {
     var ttpos = $.ui.tooltip.prototype.options.position;
 	var results = {};
 
+	function escapeHtml( value ) {
+		return String( value == null ? '' : value )
+			.replace( /&/g, '&amp;' )
+			.replace( /</g, '&lt;' )
+			.replace( />/g, '&gt;' )
+			.replace( /"/g, '&quot;' )
+			.replace( /'/g, '&#039;' );
+	}
+
     // Autocomplete widget extension to provide description
     // tooltips.
 	$.widget( "app.autocomplete", $.ui.autocomplete, {
@@ -30,11 +39,14 @@ jQuery(document).ready( function() {
 					curr_id = $(this).attr('id');
 					$.each(results, function (index, item) {
 						if ( curr_id == item.id ) {
-							var article_abstract = item.abstract.substr( 0, 255 );
-							if ( item.abstract.length > 255 ) {
+							var abstractText = String( item.abstract == null ? '' : item.abstract );
+							var article_abstract = abstractText.substr( 0, 255 );
+							if ( abstractText.length > 255 ) {
 								article_abstract += "...";
 							}
-							tooltipHtml = '<div><h4>'+ item.value +'</h4>Authors: '+ item.authors +'<br>Year: '+ item.year +'<br><br><b>Abstract:</b><br><p>'+ article_abstract +'</p></div>';
+							tooltipHtml = '<div><h4>'+ escapeHtml( item.value ) +'</h4>Authors: '+ escapeHtml( item.authors )
+								+ '<br>Year: '+ escapeHtml( item.year )
+								+ '<br><br><b>Abstract:</b><br><p>'+ escapeHtml( article_abstract ) +'</p></div>';
 							return false;
 						}
 					});

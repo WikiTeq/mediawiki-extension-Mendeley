@@ -175,6 +175,13 @@ class Mendeley {
 					}
 
 					$title = Title::newFromText( $pagename );
+					if ( !$title ) {
+						// Invalid page name (empty, oversized or illegal
+						// characters) - skip this document instead of
+						// aborting the whole import with a TypeError.
+						wfDebugLog( 'Mendeley', "Invalid generated page name: $pagename" );
+						continue;
+					}
 					$wikiPage = new WikiPage( $title );
 
 					if ( $wgMendeleyOverwriteTemplateOnly && $wgMendeleyTemplate && $wikiPage->exists() && $wikiPage->getContent() ) {
